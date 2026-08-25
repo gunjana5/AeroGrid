@@ -1,0 +1,17 @@
+# sqlite on a named volume so stream runs persist
+services:
+  stream-monitor:
+    build: .
+    command: ["python", "stream_monitor.py", "--speed", "0", "--db", "/data/aerogrid.db"]
+    volumes:
+      - aerogrid-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  batch-analysis:
+    build: .
+    command: ["python", "analyze_telemetry.py"]
+    profiles: ["batch"]
+
+volumes:
+  aerogrid-data:
