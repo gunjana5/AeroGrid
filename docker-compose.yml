@@ -1,8 +1,30 @@
-# sqlite on a named volume so stream runs persist
+# sqlite on a named volume so stream / dashboard persist
 services:
   stream-monitor:
     build: .
     command: ["python", "stream_monitor.py", "--speed", "0", "--db", "/data/aerogrid.db"]
+    volumes:
+      - aerogrid-data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  dashboard:
+    build: .
+    command:
+      [
+        "python",
+        "dashboard.py",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8765",
+        "--csv",
+        "/app/telemetry_data.csv",
+        "--db",
+        "/data/aerogrid.db",
+      ]
+    ports:
+      - "8765:8765"
     volumes:
       - aerogrid-data:/data
     environment:

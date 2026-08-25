@@ -4,9 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-# brief thresholds - keep in sync with stream_monitor
-TEMP_THRESHOLD_C = 85.0
-VIBRATION_THRESHOLD_MM_S = 15.0
+from thresholds import TEMP_THRESHOLD_C, VIBRATION_THRESHOLD_MM_S
 
 DEFAULT_CSV = Path(__file__).parent / "telemetry_data.csv"
 
@@ -22,7 +20,7 @@ def load_telemetry(csv_path: Path) -> pd.DataFrame:
 
 
 def find_failing_turbines(df: pd.DataFrame) -> pd.DataFrame:
-    # group by turbine, then avg-temp / max-vibration (same rules as the stream)
+    # group by turbine, then whole-file avg-temp / max-vibration (brief)
     summary = (
         df.groupby("turbine_id", as_index=False)
         .agg(

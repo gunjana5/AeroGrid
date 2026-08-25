@@ -6,6 +6,11 @@ import pandas as pd
 import pytest
 
 from analyze_telemetry import find_failing_turbines, load_telemetry
+from stream_monitor import TEMP_THRESHOLD_C, VIBRATION_THRESHOLD_MM_S
+from thresholds import (
+    TEMP_THRESHOLD_C as SHARED_TEMP,
+    VIBRATION_THRESHOLD_MM_S as SHARED_VIB,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 CSV_PATH = ROOT / "telemetry_data.csv"
@@ -58,3 +63,8 @@ def test_healthy_turbine_not_flagged():
     )
     failing = find_failing_turbines(df)
     assert failing.empty
+
+
+def test_batch_and_stream_share_thresholds():
+    assert TEMP_THRESHOLD_C is SHARED_TEMP
+    assert VIBRATION_THRESHOLD_MM_S is SHARED_VIB

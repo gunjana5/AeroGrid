@@ -6,16 +6,17 @@ import argparse
 import csv
 import sqlite3
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
 
-# same thresholds as batch (brief rules)
-TEMP_THRESHOLD_C = 85.0
-VIBRATION_THRESHOLD_MM_S = 15.0
+from thresholds import TEMP_THRESHOLD_C, VIBRATION_THRESHOLD_MM_S
 
 DEFAULT_CSV = Path(__file__).parent / "telemetry_data.csv"
 DEFAULT_DB = Path(__file__).parent / "aerogrid.db"
+# last N readings per turbine - not a time window (csv timestamps are strings)
+DEFAULT_WINDOW = 20
 
 # readings + alerts
 SCHEMA = """
@@ -51,22 +52,37 @@ class Reading:
 
 @dataclass
 class TurbineState:
-    # running avg via sum/count - no list of temps
+    window: int = DEFAULT_WINDOW
+    temps: deque[float] = field(default_factory=deque)
+    vibs: deque[float] = field(default_factory=deque)
     temp_sum: float = 0.0
+    # total rows seen - alert text, not the window length
     count: int = 0
-    max_vibration: float = 0.0
     # latch so a still-failing turbine doesn't spam
     is_alerting: bool = False
 
+    def __post_init__(self) -> None:
+        if self.window < 1:
+            raise ValueError("window must be >= 1")
+
     @property
     def avg_temperature(self) -> float:
-        return self.temp_sum / self.count if self.count else 0.0
+        return self.temp_sum / len(self.temps) if self.temps else 0.0
+
+    @property
+    def max_vibration(self) -> float:
+        return max(self.vibs) if self.vibs else 0.0
 
     def update(self, reading: Reading) -> None:
+        # drop oldest so mean / peak are last-N, not lifetime
+        if len(self.temps) == self.window:
+            self.temp_sum -= self.temps[0]
+            self.temps.popleft()
+            self.vibs.popleft()
+        self.temps.append(reading.temperature_c)
         self.temp_sum += reading.temperature_c
+        self.vibs.append(reading.vibration_mm_s)
         self.count += 1
-        if reading.vibration_mm_s > self.max_vibration:
-            self.max_vibration = reading.vibration_mm_s
 
     def is_failing(self) -> bool:
         return (
@@ -94,6 +110,7 @@ class Alert:
 class StreamMonitor:
     # not kinesis - local sqlite stand-in
     db_path: Path
+    window: int = DEFAULT_WINDOW
     states: dict[str, TurbineState] = field(default_factory=dict)
     alerts: list[Alert] = field(default_factory=list)
     _conn: Optional[sqlite3.Connection] = field(default=None, repr=False)
@@ -149,7 +166,9 @@ class StreamMonitor:
 
     def process_reading(self, reading: Reading) -> Optional[Alert]:
         # alert only on the edge into failing - no spam while still bad
-        state = self.states.setdefault(reading.turbine_id, TurbineState())
+        if reading.turbine_id not in self.states:
+            self.states[reading.turbine_id] = TurbineState(window=self.window)
+        state = self.states[reading.turbine_id]
         state.update(reading)
         self.store_reading(reading)
 
@@ -220,11 +239,14 @@ def run_stream(
     db_path: Path,
     speed: float = 0.0,
     batch_size: int = 1,
+    window: int = DEFAULT_WINDOW,
 ) -> list[Alert]:
     if not csv_path.exists():
         raise FileNotFoundError(f"Could not find CSV: {csv_path}")
+    if window < 1:
+        raise ValueError("window must be >= 1")
 
-    with StreamMonitor(db_path=db_path) as monitor:
+    with StreamMonitor(db_path=db_path, window=window) as monitor:
         for batch in iter_csv_readings(csv_path, batch_size=batch_size):
             for reading in batch:
                 alert = monitor.process_reading(reading)
@@ -270,6 +292,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Rows to process per batch (default: 1)",
     )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=DEFAULT_WINDOW,
+        help=f"Last N readings for mean temp / max vibration (default: {DEFAULT_WINDOW})",
+    )
     return parser
 
 
@@ -279,8 +307,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     print(f"CSV: {args.csv}")
     print(f"DB:  {args.db}")
     print(
-        f"Rules: avg temp > {TEMP_THRESHOLD_C} C OR "
-        f"any vibration > {VIBRATION_THRESHOLD_MM_S} mm/s"
+        f"Rules: last-{args.window} mean temp > {TEMP_THRESHOLD_C} C OR "
+        f"last-{args.window} max vibration > {VIBRATION_THRESHOLD_MM_S} mm/s"
     )
     print()
     run_stream(
@@ -288,6 +316,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         db_path=args.db,
         speed=args.speed,
         batch_size=args.batch_size,
+        window=args.window,
     )
 
 

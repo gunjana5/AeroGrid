@@ -7,7 +7,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY analyze_telemetry.py stream_monitor.py dashboard.py ./
+COPY analyze_telemetry.py stream_monitor.py dashboard.py thresholds.py ./
 COPY telemetry_data.csv ./
 
 # stream / dashboard are what i added after the brief:

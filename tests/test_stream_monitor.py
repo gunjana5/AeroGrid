@@ -56,7 +56,7 @@ def test_alert_on_vibration_transition(tmp_path):
 
 
 def test_alert_on_avg_temperature_transition(tmp_path):
-    # avg of 80 then 100 = 90 > 85
+    # avg of 80 then 100 = 90 > 85 (both sit in a default window of 20)
     db = tmp_path / "test.db"
     with StreamMonitor(db_path=db) as monitor:
         assert (
@@ -72,6 +72,33 @@ def test_alert_on_avg_temperature_transition(tmp_path):
             monitor.process_reading(Reading("t3", "T-02", 100.0, 1.0, 10.0))
             is None
         )
+
+
+def test_window_mean_recovers_and_can_alert_again(tmp_path):
+    # window 2: two hots fire, two cools drop the mean, two hots fire again
+    db = tmp_path / "window.db"
+    with StreamMonitor(db_path=db, window=2) as monitor:
+        assert monitor.process_reading(Reading("t1", "T-02", 90.0, 1.0, 10.0)) is not None
+        assert monitor.process_reading(Reading("t2", "T-02", 90.0, 1.0, 10.0)) is None
+        assert monitor.process_reading(Reading("t3", "T-02", 50.0, 1.0, 10.0)) is None
+        assert monitor.process_reading(Reading("t4", "T-02", 50.0, 1.0, 10.0)) is None
+        assert monitor.process_reading(Reading("t5", "T-02", 90.0, 1.0, 10.0)) is None
+        second = monitor.process_reading(Reading("t6", "T-02", 90.0, 1.0, 10.0))
+        assert second is not None
+        assert len(monitor.alerts) == 2
+
+
+def test_window_vibration_spike_can_age_out(tmp_path):
+    db = tmp_path / "vib-window.db"
+    with StreamMonitor(db_path=db, window=2) as monitor:
+        assert monitor.process_reading(Reading("t1", "T-01", 50.0, 5.0, 10.0)) is None
+        assert monitor.process_reading(Reading("t2", "T-01", 50.0, 20.0, 10.0)) is not None
+        assert monitor.process_reading(Reading("t3", "T-01", 50.0, 5.0, 10.0)) is None
+        # window is [5, 5] - peak aged out, latch should be clear
+        assert monitor.process_reading(Reading("t4", "T-01", 50.0, 5.0, 10.0)) is None
+        again = monitor.process_reading(Reading("t5", "T-01", 50.0, 20.0, 10.0))
+        assert again is not None
+        assert len(monitor.alerts) == 2
 
 
 def test_sqlite_persists_readings(tmp_path):
@@ -135,3 +162,12 @@ def test_format_alert():
 def test_missing_csv_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         run_stream(csv_path=tmp_path / "missing.csv", db_path=tmp_path / "x.db")
+
+
+def test_window_must_be_at_least_one(tmp_path):
+    with pytest.raises(ValueError, match="window"):
+        run_stream(
+            csv_path=CSV_PATH,
+            db_path=tmp_path / "x.db",
+            window=0,
+        )
